@@ -572,22 +572,7 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.width = msg.Width
 		m.height = msg.Height
 
-		availableHeight := m.height - 9
-		if m.showSplitPane {
-			availableHeight = m.height - 18
-		}
-		if availableHeight < 6 {
-			availableHeight = 6
-		}
-
-		m.profilesTable.SetHeight(availableHeight)
-		m.submissionsTable.SetHeight(availableHeight)
-		m.jobsTable.SetHeight(availableHeight)
-		m.orgsTable.SetHeight(availableHeight)
-
-		m.kanbanModel.SetSize(m.width, availableHeight)
-		m.detailViewport.Width = m.width - 10
-		m.detailViewport.Height = m.height - 10
+		m.recalculateAvailableHeight()
 
 		m.applySortingAndFilters()
 		return m, nil
@@ -841,29 +826,35 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		case "1":
 			m.activeTab = TabProfiles
 			m.statusMsg = "Switched to [1] Profiles"
+			m.recalculateAvailableHeight()
 			return m, nil
 
 		case "2":
 			m.activeTab = TabApplications
 			m.statusMsg = "Switched to [2] Applications"
+			m.recalculateAvailableHeight()
 			return m, nil
 
 		case "3":
 			m.activeTab = TabJobs
 			m.statusMsg = "Switched to [3] Jobs"
+			m.recalculateAvailableHeight()
 			return m, nil
 
 		case "4":
 			m.activeTab = TabOrganisations
 			m.statusMsg = "Switched to [4] Organisations"
+			m.recalculateAvailableHeight()
 			return m, nil
 
 		case "tab":
 			m.activeTab = (m.activeTab + 1) % 4
+			m.recalculateAvailableHeight()
 			return m, nil
 
 		case "shift+tab":
 			m.activeTab = (m.activeTab + 3) % 4
+			m.recalculateAvailableHeight()
 			return m, nil
 
 		case "/":
@@ -2278,27 +2269,14 @@ func (m AppModel) View() string {
 		statusLine = lipgloss.NewStyle().Foreground(lipgloss.Color("#555555")).Render("● Ready")
 	}
 
-	helpParts := []string{
-		"[1-4/Tab] Tab",
-		"[/] Search",
-		"[f] Filter",
-		"[r] Reset Filter",
-		"[s/S] Sort",
-		"[a] Add",
-		"[e] Edit",
-		"[x] Delete",
-		"[Enter/d] Details",
-		"[p] Preview",
-		"[/]] Cols",
+	helpParts := m.getHelpParts()
+	helpLines := wrapHelpItems(helpParts, m.width)
+	helpStyle := lipgloss.NewStyle().Foreground(lipgloss.Color("#777777"))
+	var renderedHelpLines []string
+	for _, line := range helpLines {
+		renderedHelpLines = append(renderedHelpLines, helpStyle.Render(line))
 	}
-	if m.activeTab == TabApplications {
-		helpParts = append(helpParts, "[v/t] Kanban/Table", "[m/b] Stage")
-	} else {
-		helpParts = append(helpParts, "[↑/↓] Select")
-	}
-	helpParts = append(helpParts, "[R] Reload DB", "[q] Quit")
-
-	helpBar := lipgloss.NewStyle().Foreground(lipgloss.Color("#777777")).Render(strings.Join(helpParts, " • "))
+	helpBar := strings.Join(renderedHelpLines, "\n")
 
 	layoutItems := []string{headerBar}
 	if subHeader != "" {
@@ -2314,6 +2292,98 @@ func (m AppModel) View() string {
 	layoutItems = append(layoutItems, statusLine, helpBar)
 
 	return lipgloss.JoinVertical(lipgloss.Left, layoutItems...)
+}
+
+func (m AppModel) getHelpParts() []string {
+	helpParts := []string{
+		"[1-4/Tab] Tab",
+		"[/] Search",
+		"[f] Filter",
+		"[r] Reset Filter",
+		"[s/S] Sort",
+		"[a] Add",
+		"[e] Edit",
+		"[x] Delete",
+		"[Enter/d] Details",
+		"[p] Preview",
+		"[[/]] Cols",
+	}
+	if m.activeTab == TabApplications {
+		helpParts = append(helpParts, "[v/t] Kanban/Table", "[m/b] Stage")
+	} else {
+		helpParts = append(helpParts, "[↑/↓] Select")
+	}
+	helpParts = append(helpParts, "[R] Reload DB", "[q] Quit")
+	return helpParts
+}
+
+func wrapHelpItems(items []string, maxWidth int) []string {
+	if len(items) == 0 {
+		return nil
+	}
+	if maxWidth <= 0 {
+		return []string{strings.Join(items, " • ")}
+	}
+
+	sep := " • "
+	sepWidth := lipgloss.Width(sep)
+
+	var lines []string
+	var currentLine []string
+	currentWidth := 0
+
+	for _, item := range items {
+		itemWidth := lipgloss.Width(item)
+		if len(currentLine) == 0 {
+			currentLine = append(currentLine, item)
+			currentWidth = itemWidth
+		} else if currentWidth+sepWidth+itemWidth <= maxWidth {
+			currentLine = append(currentLine, item)
+			currentWidth += sepWidth + itemWidth
+		} else {
+			lines = append(lines, strings.Join(currentLine, sep))
+			currentLine = []string{item}
+			currentWidth = itemWidth
+		}
+	}
+	if len(currentLine) > 0 {
+		lines = append(lines, strings.Join(currentLine, sep))
+	}
+
+	return lines
+}
+
+func (m AppModel) helpBarLineCount() int {
+	lines := wrapHelpItems(m.getHelpParts(), m.width)
+	if len(lines) == 0 {
+		return 1
+	}
+	return len(lines)
+}
+
+func (m *AppModel) recalculateAvailableHeight() {
+	helpLines := m.helpBarLineCount()
+	extraHelpLines := 0
+	if helpLines > 1 {
+		extraHelpLines = helpLines - 1
+	}
+
+	availableHeight := m.height - 9 - extraHelpLines
+	if m.showSplitPane {
+		availableHeight = m.height - 18 - extraHelpLines
+	}
+	if availableHeight < 6 {
+		availableHeight = 6
+	}
+
+	m.profilesTable.SetHeight(availableHeight)
+	m.submissionsTable.SetHeight(availableHeight)
+	m.jobsTable.SetHeight(availableHeight)
+	m.orgsTable.SetHeight(availableHeight)
+
+	m.kanbanModel.SetSize(m.width, availableHeight)
+	m.detailViewport.Width = m.width - 10
+	m.detailViewport.Height = m.height - 10
 }
 
 func truncateString(s string, maxLen int) string {

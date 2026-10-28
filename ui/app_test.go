@@ -1,11 +1,13 @@
 package ui
 
 import (
+	"strings"
 	"testing"
 
 	"ats-tui/models"
 
 	"github.com/charmbracelet/bubbles/table"
+	"github.com/charmbracelet/lipgloss"
 )
 
 func TestTruncateString(t *testing.T) {
@@ -248,5 +250,96 @@ func TestDeleteConfirmationFlow(t *testing.T) {
 	app.showDeleteConfirm = false
 	if app.showDeleteConfirm {
 		t.Fatalf("expected showDeleteConfirm to be false after cancel")
+	}
+}
+
+func TestWrapHelpItems(t *testing.T) {
+	items := []string{
+		"[1-4/Tab] Tab",
+		"[/] Search",
+		"[f] Filter",
+		"[r] Reset Filter",
+		"[s/S] Sort",
+		"[a] Add",
+		"[e] Edit",
+		"[x] Delete",
+		"[Enter/d] Details",
+		"[p] Preview",
+		"[[/]] Cols",
+		"[v/t] Kanban/Table",
+		"[m/b] Stage",
+		"[R] Reload DB",
+		"[q] Quit",
+	}
+
+	// 1. Empty items
+	if len(wrapHelpItems(nil, 100)) != 0 {
+		t.Errorf("expected 0 lines for nil items")
+	}
+
+	// 2. Non-positive width fallback
+	fallback := wrapHelpItems(items, 0)
+	if len(fallback) != 1 {
+		t.Errorf("expected 1 line for width <= 0, got %d", len(fallback))
+	}
+
+	// 3. Wide width fits on single line
+	wideLines := wrapHelpItems(items, 300)
+	if len(wideLines) != 1 {
+		t.Errorf("expected 1 line for width 300, got %d", len(wideLines))
+	}
+
+	// 4. Constrained width wraps across multiple lines
+	wrappedLines := wrapHelpItems(items, 140)
+	if len(wrappedLines) < 2 {
+		t.Errorf("expected at least 2 lines for width 140, got %d", len(wrappedLines))
+	}
+
+	// Verify each line does not exceed maxWidth and does not have dangling separators
+	for idx, line := range wrappedLines {
+		w := lipgloss.Width(line)
+		if w > 140 {
+			t.Errorf("line %d width %d exceeds max width 140", idx, w)
+		}
+		if strings.HasPrefix(line, " • ") || strings.HasSuffix(line, " • ") {
+			t.Errorf("line %d has dangling bullet separator: %q", idx, line)
+		}
+	}
+
+	// Verify all items are present across lines without being broken
+	joined := strings.Join(wrappedLines, " • ")
+	for _, item := range items {
+		if !strings.Contains(joined, item) {
+			t.Errorf("missing item %q in wrapped output", item)
+		}
+	}
+}
+
+func TestHelpBarWrappingAndHeightAdjustment(t *testing.T) {
+	app := NewApp(nil)
+	app.width = 140
+	app.height = 35
+
+	app.recalculateAvailableHeight()
+	lineCount := app.helpBarLineCount()
+	if lineCount < 2 {
+		t.Errorf("expected at least 2 lines of help for width 140, got %d", lineCount)
+	}
+
+	// Verify available height was adjusted to account for extra help line(s)
+	expectedHeight := 35 - 18 - (lineCount - 1) // showSplitPane is true initially
+	// bubbles/table subtracts 2 for header/border in Height()
+	expectedViewportHeight := expectedHeight - 2
+	if app.profilesTable.Height() != expectedViewportHeight {
+		t.Errorf("expected table viewport height %d, got %d", expectedViewportHeight, app.profilesTable.Height())
+	}
+
+	// Render view to ensure no panic or formatting issues
+	view := app.View()
+	if !strings.Contains(view, "[1-4/Tab] Tab") {
+		t.Errorf("expected view to contain [1-4/Tab] Tab")
+	}
+	if !strings.Contains(view, "[q] Quit") {
+		t.Errorf("expected view to contain [q] Quit")
 	}
 }
