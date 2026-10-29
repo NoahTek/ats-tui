@@ -28,8 +28,8 @@ const (
 
 // Applications View Mode
 const (
-	AppViewKanban = 0
-	AppViewTable  = 1
+	AppViewTable  = 0
+	AppViewKanban = 1
 )
 
 // Messages
@@ -203,7 +203,7 @@ func NewApp(pool *pgxpool.Pool) AppModel {
 	return AppModel{
 		pool:                 pool,
 		activeTab:            TabProfiles,
-		appViewMode:          AppViewKanban,
+		appViewMode:          AppViewTable,
 		profilesTable:        pTable,
 		submissionsTable:     sTable,
 		jobsTable:            jTable,

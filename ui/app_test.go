@@ -8,6 +8,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/table"
 	"github.com/charmbracelet/lipgloss"
+	tea "github.com/charmbracelet/bubbletea"
 )
 
 func TestTruncateString(t *testing.T) {
@@ -476,5 +477,51 @@ func TestMultiRowSelectionAndBatchDelete(t *testing.T) {
 	cleanRows := app.profilesTable.Rows()
 	if strings.HasPrefix(cleanRows[0][0], "[") {
 		t.Errorf("expected row 0 to have no checkbox prefix when selection is empty, got %q", cleanRows[0][0])
+	}
+}
+
+func TestApplicationsDefaultViewAndToggle(t *testing.T) {
+	app := NewApp(nil)
+
+	// 1. Verify default view mode is Table
+	if app.appViewMode != AppViewTable {
+		t.Fatalf("expected default appViewMode to be AppViewTable (%d), got %d", AppViewTable, app.appViewMode)
+	}
+
+	// Switch to TabApplications
+	app.activeTab = TabApplications
+
+	// 2. Press "v" -> toggles to Kanban
+	updatedModel, _ := app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'v'}})
+	app = updatedModel.(AppModel)
+	if app.appViewMode != AppViewKanban {
+		t.Fatalf("expected appViewMode to be AppViewKanban after pressing 'v', got %d", app.appViewMode)
+	}
+	if !strings.Contains(app.statusMsg, "Kanban Board") {
+		t.Errorf("expected statusMsg to indicate Kanban Board, got %q", app.statusMsg)
+	}
+
+	// 3. Press "v" again -> toggles back to Table
+	updatedModel, _ = app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'v'}})
+	app = updatedModel.(AppModel)
+	if app.appViewMode != AppViewTable {
+		t.Fatalf("expected appViewMode to be AppViewTable after pressing 'v' again, got %d", app.appViewMode)
+	}
+	if !strings.Contains(app.statusMsg, "Table View") {
+		t.Errorf("expected statusMsg to indicate Table View, got %q", app.statusMsg)
+	}
+
+	// 4. Press "t" -> toggles to Kanban
+	updatedModel, _ = app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
+	app = updatedModel.(AppModel)
+	if app.appViewMode != AppViewKanban {
+		t.Fatalf("expected appViewMode to be AppViewKanban after pressing 't', got %d", app.appViewMode)
+	}
+
+	// 5. Press "t" again -> toggles back to Table
+	updatedModel, _ = app.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune{'t'}})
+	app = updatedModel.(AppModel)
+	if app.appViewMode != AppViewTable {
+		t.Fatalf("expected appViewMode to be AppViewTable after pressing 't' again, got %d", app.appViewMode)
 	}
 }
