@@ -428,3 +428,19 @@ func DeleteApplication(ctx context.Context, pool *pgxpool.Pool, appID int) error
 	}
 	return nil
 }
+
+// DeleteApplications removes multiple application submissions by their IDs (cascades to notes and application_products).
+func DeleteApplications(ctx context.Context, pool *pgxpool.Pool, appIDs []int) error {
+	if len(appIDs) == 0 {
+		return nil
+	}
+	query := `DELETE FROM applications WHERE id = ANY($1);`
+	tag, err := pool.Exec(ctx, query, appIDs)
+	if err != nil {
+		return fmt.Errorf("failed to delete applications: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("no applications found to delete")
+	}
+	return nil
+}

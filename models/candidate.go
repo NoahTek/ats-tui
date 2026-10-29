@@ -171,6 +171,22 @@ func DeleteCandidate(ctx context.Context, pool *pgxpool.Pool, id int) error {
 	return nil
 }
 
+// DeleteCandidates removes multiple candidates by their IDs (cascades to applications, notes, and application_products).
+func DeleteCandidates(ctx context.Context, pool *pgxpool.Pool, ids []int) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	query := `DELETE FROM candidates WHERE id = ANY($1);`
+	tag, err := pool.Exec(ctx, query, ids)
+	if err != nil {
+		return fmt.Errorf("failed to delete candidates: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("no candidates found to delete")
+	}
+	return nil
+}
+
 // FetchProfiles is an alias for FetchCandidateProfiles.
 func FetchProfiles(ctx context.Context, pool *pgxpool.Pool, searchQuery string) ([]CandidateProfile, error) {
 	return FetchCandidateProfiles(ctx, pool, searchQuery)

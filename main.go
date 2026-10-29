@@ -5,56 +5,102 @@ import (
 	"flag"
 	"fmt"
 	"os"
+	"time"
 
 	"ats-tui/db"
 	"ats-tui/ui"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/jackc/pgx/v5/pgxpool"
 )
 
-const defaultDBURI = "postgres://postgres:postgres@localhost:5434/ats"
-
-func resolveDBURI() string {
-	var flagURI string
-	flag.StringVar(&flagURI, "db", "", "PostgreSQL connection string (e.g., postgres://user:pass@host:port/dbname)")
-	flag.Parse()
-
-	if flagURI != "" {
-		return flagURI
-	}
-
-	if env := os.Getenv("DATABASE_URL"); env != "" {
-		return env
-	}
-	if env := os.Getenv("ATS_DB_URI"); env != "" {
-		return env
-	}
-
-	return defaultDBURI
-}
+const (
+	defaultPort5434URI = "postgres://postgres:postgres@localhost:5434/ats"
+	defaultPort5432URI = "postgres://postgres:postgres@localhost:5432/ats"
+)
 
 func main() {
-	ctx := context.Background()
-	connStr := resolveDBURI()
+	var (
+		flagURI   string
+		flagSetup bool
+	)
 
-	pool, err := db.NewPool(ctx, connStr)
-	if err != nil {
-		fmt.Printf("\n❌ Database connection failed:\n  %v\n\n", err)
-		fmt.Printf("Please ensure PostgreSQL is running and supply connection details via:\n")
-		fmt.Printf("  • CLI flag:        ./ats-tui -db \"postgres://user:password@localhost:5432/ats\"\n")
-		fmt.Printf("  • Environment var: export DATABASE_URL=\"postgres://user:password@localhost:5432/ats\"\n\n")
-		os.Exit(1)
+	flag.StringVar(&flagURI, "db", "", "PostgreSQL connection string (e.g., postgres://user:pass@host:port/dbname)")
+	flag.BoolVar(&flagSetup, "setup", false, "Open In-App Setup Wizard to configure database settings")
+	flag.Parse()
+
+	// 1. Try to load saved config from ~/.config/ats-tui/config.json
+	savedCfg, _ := db.LoadConfig()
+
+	// If explicit --setup requested, launch Setup Wizard directly
+	if flagSetup {
+		root := ui.NewRootModel(nil, savedCfg, true)
+		p := tea.NewProgram(root, tea.WithAltScreen())
+		if _, err := p.Run(); err != nil {
+			fmt.Printf("Error running ATS TUI setup: %v\n", err)
+			os.Exit(1)
+		}
+		return
 	}
-	defer pool.Close()
 
-	// Automatically apply embedded database migrations
-	if err := db.RunMigrations(ctx, pool); err != nil {
-		fmt.Printf("\n❌ Database migration failed:\n  %v\n\n", err)
-		os.Exit(1)
+	// 2. Determine connection candidate list in priority order
+	var candidateURIs []string
+
+	if flagURI != "" {
+		candidateURIs = []string{flagURI}
+	} else if env := os.Getenv("DATABASE_URL"); env != "" {
+		candidateURIs = []string{env}
+	} else if env := os.Getenv("ATS_DB_URI"); env != "" {
+		candidateURIs = []string{env}
+	} else if savedCfg != nil {
+		candidateURIs = []string{savedCfg.ConnectionURI()}
+	} else {
+		candidateURIs = []string{defaultPort5434URI, defaultPort5432URI}
 	}
 
-	app := ui.NewApp(pool)
-	p := tea.NewProgram(app, tea.WithAltScreen())
+	// 3. Attempt quiet connection to candidate URIs
+	var pool *pgxpool.Pool
+	for _, uri := range candidateURIs {
+		ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+		p, err := db.NewPool(ctx, uri)
+		cancel()
+		if err == nil {
+			pool = p
+			break
+		}
+	}
+
+	// 4. If connection succeeded, ensure migrations and initial bootstrap
+	if pool != nil {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+
+		if err := db.RunMigrations(ctx, pool); err == nil {
+			// If database is completely empty and user hasn't explicitly disabled demo seeding
+			if savedCfg == nil || savedCfg.SeedDemo {
+				if empty, err := db.IsDatabaseEmpty(ctx, pool); err == nil && empty {
+					_ = db.SeedSampleData(ctx, pool)
+				}
+			}
+
+			// Launch main application directly
+			root := ui.NewRootModel(pool, savedCfg, false)
+			p := tea.NewProgram(root, tea.WithAltScreen())
+			if _, err := p.Run(); err != nil {
+				fmt.Printf("Error running ATS TUI: %v\n", err)
+				os.Exit(1)
+			}
+			return
+		}
+
+		// If migrations failed, close pool and fall through to Setup Wizard
+		pool.Close()
+		pool = nil
+	}
+
+	// 5. If no connection succeeded, seamlessly launch the In-App Setup Wizard!
+	root := ui.NewRootModel(nil, savedCfg, true)
+	p := tea.NewProgram(root, tea.WithAltScreen())
 	if _, err := p.Run(); err != nil {
 		fmt.Printf("Error running ATS TUI: %v\n", err)
 		os.Exit(1)

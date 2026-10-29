@@ -113,3 +113,25 @@ func DeleteOrganisation(ctx context.Context, pool *pgxpool.Pool, id int) error {
 	}
 	return nil
 }
+
+// DeleteOrganisations removes multiple client organisations by their IDs.
+func DeleteOrganisations(ctx context.Context, pool *pgxpool.Pool, ids []int) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	var count int
+	err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM jobs WHERE client_id = ANY($1);`, ids).Scan(&count)
+	if err == nil && count > 0 {
+		return fmt.Errorf("cannot delete organisations: %d job(s) are assigned to them. Please reassign or delete the jobs first", count)
+	}
+
+	query := `DELETE FROM clients WHERE id = ANY($1);`
+	tag, err := pool.Exec(ctx, query, ids)
+	if err != nil {
+		return fmt.Errorf("failed to delete organisations: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("no organisations found to delete")
+	}
+	return nil
+}

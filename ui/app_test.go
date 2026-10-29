@@ -343,3 +343,138 @@ func TestHelpBarWrappingAndHeightAdjustment(t *testing.T) {
 		t.Errorf("expected view to contain [q] Quit")
 	}
 }
+
+func TestSortOrderRowSelectionAndPreview(t *testing.T) {
+	app := NewApp(nil)
+	app.width = 120
+	app.height = 30
+	app.activeTab = TabProfiles
+
+	// Mock DB profiles in DESC order (as PostgreSQL returns them)
+	app.profiles = []models.CandidateProfile{
+		{ID: 10, CandidateCode: "CAN-010", Name: "Jordan Bell", Email: "jordan@example.com", Location: "Remote"},
+		{ID: 1, CandidateCode: "CAN-001", Name: "Alex Rivera", Email: "alex@example.com", Location: "San Francisco"},
+	}
+
+	// 1. Ascending sort order by Candidate ID (▲)
+	app.profileSortCol = 0
+	app.profileSortAsc = true
+	app.applySortingAndFilters()
+	app.profilesTable.SetCursor(0)
+
+	sel := app.getSelectedProfile()
+	if sel == nil {
+		t.Fatalf("expected selected profile not to be nil")
+	}
+	if sel.CandidateCode != "CAN-001" {
+		t.Errorf("expected ascending sort row 0 to be CAN-001, got %s (%s)", sel.CandidateCode, sel.Name)
+	}
+
+	preview := app.renderSplitPane()
+	if !strings.Contains(preview, "Alex Rivera") || !strings.Contains(preview, "CAN-001") {
+		t.Errorf("expected preview in ascending order to show Alex Rivera (CAN-001), got: %s", preview)
+	}
+	if strings.Contains(preview, "Jordan Bell") {
+		t.Errorf("preview in ascending order erroneously showed Jordan Bell: %s", preview)
+	}
+
+	// 2. Descending sort order by Candidate ID (▼)
+	app.profileSortAsc = false
+	app.applySortingAndFilters()
+	app.profilesTable.SetCursor(0)
+
+	selDesc := app.getSelectedProfile()
+	if selDesc == nil {
+		t.Fatalf("expected selected profile not to be nil")
+	}
+	if selDesc.CandidateCode != "CAN-010" {
+		t.Errorf("expected descending sort row 0 to be CAN-010, got %s (%s)", selDesc.CandidateCode, selDesc.Name)
+	}
+
+	previewDesc := app.renderSplitPane()
+	if !strings.Contains(previewDesc, "Jordan Bell") || !strings.Contains(previewDesc, "CAN-010") {
+		t.Errorf("expected preview in descending order to show Jordan Bell (CAN-010), got: %s", previewDesc)
+	}
+}
+
+func TestMultiRowSelectionAndBatchDelete(t *testing.T) {
+	app := NewApp(nil)
+	app.width = 120
+	app.height = 30
+	app.activeTab = TabProfiles
+
+	app.profiles = []models.CandidateProfile{
+		{ID: 1, CandidateCode: "CAN-001", Name: "Alex Rivera"},
+		{ID: 2, CandidateCode: "CAN-002", Name: "Priya Sharma"},
+		{ID: 3, CandidateCode: "CAN-003", Name: "Marcus Vance"},
+	}
+	app.applySortingAndFilters()
+	app.profilesTable.SetCursor(0)
+
+	// 1. Initial selection count is 0
+	if app.selectedCount() != 0 {
+		t.Fatalf("expected initial selected count to be 0, got %d", app.selectedCount())
+	}
+
+	// 2. Select first row using Space key
+	app.toggleCurrentRowSelection()
+	app.applySortingAndFilters()
+
+	if app.selectedCount() != 1 {
+		t.Fatalf("expected 1 selected profile, got %d", app.selectedCount())
+	}
+	if !app.selectedProfileIDs[1] {
+		t.Fatalf("expected candidate ID 1 to be selected")
+	}
+
+	// Verify checkbox rendered in table rows
+	rows := app.profilesTable.Rows()
+	if !strings.HasPrefix(rows[0][0], "[✓]") {
+		t.Errorf("expected row 0 to have '[✓]' prefix, got %q", rows[0][0])
+	}
+	if !strings.HasPrefix(rows[1][0], "[ ]") {
+		t.Errorf("expected unselected row 1 to have '[ ]' prefix, got %q", rows[1][0])
+	}
+
+	// 3. Select next row (cursor was moved to 1 by toggle)
+	app.toggleCurrentRowSelection()
+	app.applySortingAndFilters()
+
+	if app.selectedCount() != 2 {
+		t.Fatalf("expected 2 selected profiles, got %d", app.selectedCount())
+	}
+
+	// 4. Verify SubHeader reflects selection
+	view := app.View()
+	if !strings.Contains(view, "Selected: 2 candidates") {
+		t.Errorf("expected view to contain 'Selected: 2 candidates', got: %s", view)
+	}
+
+	// 5. Open Batch Delete Confirmation
+	app.openDeleteConfirm()
+	if !app.showDeleteConfirm {
+		t.Fatalf("expected showDeleteConfirm to be true")
+	}
+	if len(app.deleteTargetIDs) != 2 {
+		t.Fatalf("expected 2 deleteTargetIDs, got %d", len(app.deleteTargetIDs))
+	}
+
+	modal := app.renderDeleteConfirmModal()
+	if !strings.Contains(modal, "2 Candidates") || !strings.Contains(modal, "2 records") {
+		t.Errorf("expected modal to mention 2 records, got: %s", modal)
+	}
+
+	// 6. Test selection clearing with Esc
+	app.showDeleteConfirm = false
+	app.clearCurrentTabSelection()
+	app.applySortingAndFilters()
+
+	if app.selectedCount() != 0 {
+		t.Fatalf("expected selected count to be 0 after clear, got %d", app.selectedCount())
+	}
+
+	cleanRows := app.profilesTable.Rows()
+	if strings.HasPrefix(cleanRows[0][0], "[") {
+		t.Errorf("expected row 0 to have no checkbox prefix when selection is empty, got %q", cleanRows[0][0])
+	}
+}

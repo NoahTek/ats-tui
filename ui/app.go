@@ -110,6 +110,18 @@ type AppModel struct {
 	jobs        []models.JobPosting
 	orgs        []models.Organisation
 
+	// Filtered & Sorted Data Slices (synced with active tables)
+	filteredProfiles    []models.CandidateProfile
+	filteredSubmissions []models.ApplicationSubmissionRow
+	filteredJobs        []models.JobPosting
+	filteredOrgs        []models.Organisation
+
+	// Multi-Row Selection State (mapped by entity ID)
+	selectedProfileIDs    map[int]bool
+	selectedSubmissionIDs map[int]bool
+	selectedJobIDs        map[int]bool
+	selectedOrgIDs        map[int]bool
+
 	// Tables
 	profilesTable    table.Model
 	submissionsTable table.Model
@@ -149,6 +161,7 @@ type AppModel struct {
 	showDeleteConfirm bool
 	deleteTargetType  EntityType
 	deleteTargetID    int
+	deleteTargetIDs   []int
 	deleteTargetDesc  string
 
 	// CRUD Form Modal
@@ -205,6 +218,10 @@ func NewApp(pool *pgxpool.Pool) AppModel {
 		appSortAsc:           true,
 		jobSortAsc:           true,
 		orgSortAsc:           true,
+		selectedProfileIDs:    make(map[int]bool),
+		selectedSubmissionIDs: make(map[int]bool),
+		selectedJobIDs:        make(map[int]bool),
+		selectedOrgIDs:        make(map[int]bool),
 		statusMsg:            "Welcome to ATS TUI. Use [1-4] or [Tab] to navigate.",
 	}
 }
@@ -360,6 +377,7 @@ func createStyledTable(cols []table.Column, height int) table.Model {
 
 // updateTableData safely synchronizes table columns and rows, avoiding index-out-of-range panics in bubbles/table
 func updateTableData(t *table.Model, cols []table.Column, rows []table.Row) {
+	prevCursor := t.Cursor()
 	// 1. Temporarily clear rows so SetColumns doesn't render mismatched existing rows in UpdateViewport()
 	t.SetRows(nil)
 	// 2. Set new columns
@@ -383,6 +401,11 @@ func updateTableData(t *table.Model, cols []table.Column, rows []table.Row) {
 	}
 	// 4. Set normalized rows
 	t.SetRows(safeRows)
+	if prevCursor >= 0 && prevCursor < len(safeRows) {
+		t.SetCursor(prevCursor)
+	} else if len(safeRows) > 0 {
+		t.SetCursor(len(safeRows) - 1)
+	}
 }
 
 // Database Commands
@@ -530,29 +553,168 @@ func saveOrgCmd(pool *pgxpool.Pool, o models.Organisation, isEdit bool) tea.Cmd 
 	}
 }
 
+func (m AppModel) getSelectedProfile() *models.CandidateProfile {
+	list := m.filteredProfiles
+	if len(list) == 0 {
+		list = m.profiles
+	}
+	idx := m.profilesTable.Cursor()
+	if idx >= 0 && idx < len(list) {
+		return &list[idx]
+	}
+	return nil
+}
+
+func (m AppModel) getSelectedSubmission() *models.ApplicationSubmissionRow {
+	list := m.filteredSubmissions
+	if len(list) == 0 {
+		list = m.submissions
+	}
+	idx := m.submissionsTable.Cursor()
+	if idx >= 0 && idx < len(list) {
+		return &list[idx]
+	}
+	return nil
+}
+
+func (m AppModel) getSelectedJob() *models.JobPosting {
+	list := m.filteredJobs
+	if len(list) == 0 {
+		list = m.jobs
+	}
+	idx := m.jobsTable.Cursor()
+	if idx >= 0 && idx < len(list) {
+		return &list[idx]
+	}
+	return nil
+}
+
+func (m AppModel) getSelectedOrg() *models.Organisation {
+	list := m.filteredOrgs
+	if len(list) == 0 {
+		list = m.orgs
+	}
+	idx := m.orgsTable.Cursor()
+	if idx >= 0 && idx < len(list) {
+		return &list[idx]
+	}
+	return nil
+}
+
+func (m AppModel) selectedCount() int {
+	switch m.activeTab {
+	case TabProfiles:
+		return len(m.selectedProfileIDs)
+	case TabApplications:
+		return len(m.selectedSubmissionIDs)
+	case TabJobs:
+		return len(m.selectedJobIDs)
+	case TabOrganisations:
+		return len(m.selectedOrgIDs)
+	default:
+		return 0
+	}
+}
+
+func (m *AppModel) clearCurrentTabSelection() {
+	switch m.activeTab {
+	case TabProfiles:
+		m.selectedProfileIDs = make(map[int]bool)
+	case TabApplications:
+		m.selectedSubmissionIDs = make(map[int]bool)
+	case TabJobs:
+		m.selectedJobIDs = make(map[int]bool)
+	case TabOrganisations:
+		m.selectedOrgIDs = make(map[int]bool)
+	}
+}
+
+func (m *AppModel) toggleCurrentRowSelection() {
+	switch m.activeTab {
+	case TabProfiles:
+		if p := m.getSelectedProfile(); p != nil {
+			if m.selectedProfileIDs == nil {
+				m.selectedProfileIDs = make(map[int]bool)
+			}
+			if m.selectedProfileIDs[p.ID] {
+				delete(m.selectedProfileIDs, p.ID)
+			} else {
+				m.selectedProfileIDs[p.ID] = true
+			}
+			m.profilesTable.MoveDown(1)
+		}
+	case TabApplications:
+		if m.appViewMode == AppViewTable {
+			if s := m.getSelectedSubmission(); s != nil {
+				if m.selectedSubmissionIDs == nil {
+					m.selectedSubmissionIDs = make(map[int]bool)
+				}
+				if m.selectedSubmissionIDs[s.ApplicationID] {
+					delete(m.selectedSubmissionIDs, s.ApplicationID)
+				} else {
+					m.selectedSubmissionIDs[s.ApplicationID] = true
+				}
+				m.submissionsTable.MoveDown(1)
+			}
+		}
+	case TabJobs:
+		if j := m.getSelectedJob(); j != nil {
+			if m.selectedJobIDs == nil {
+				m.selectedJobIDs = make(map[int]bool)
+			}
+			if m.selectedJobIDs[j.ID] {
+				delete(m.selectedJobIDs, j.ID)
+			} else {
+				m.selectedJobIDs[j.ID] = true
+			}
+			m.jobsTable.MoveDown(1)
+		}
+	case TabOrganisations:
+		if o := m.getSelectedOrg(); o != nil {
+			if m.selectedOrgIDs == nil {
+				m.selectedOrgIDs = make(map[int]bool)
+			}
+			if m.selectedOrgIDs[o.ID] {
+				delete(m.selectedOrgIDs, o.ID)
+			} else {
+				m.selectedOrgIDs[o.ID] = true
+			}
+			m.orgsTable.MoveDown(1)
+		}
+	}
+}
+
 func deleteEntityCmd(pool *pgxpool.Pool, entityType EntityType, id int, desc string) tea.Cmd {
+	return deleteEntitiesCmd(pool, entityType, []int{id}, desc)
+}
+
+func deleteEntitiesCmd(pool *pgxpool.Pool, entityType EntityType, ids []int, desc string) tea.Cmd {
 	return func() tea.Msg {
-		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
+
+		if len(ids) == 0 {
+			return nil
+		}
 
 		switch entityType {
 		case EntityCandidate:
-			if err := models.DeleteCandidate(ctx, pool, id); err != nil {
+			if err := models.DeleteCandidates(ctx, pool, ids); err != nil {
 				return AppErrMsg{Err: err}
 			}
 			return CandidateDeletedMsg{Desc: desc}
 		case EntityApplication:
-			if err := models.DeleteApplication(ctx, pool, id); err != nil {
+			if err := models.DeleteApplications(ctx, pool, ids); err != nil {
 				return AppErrMsg{Err: err}
 			}
 			return ApplicationDeletedMsg{Desc: desc}
 		case EntityJob:
-			if err := models.DeleteJob(ctx, pool, id); err != nil {
+			if err := models.DeleteJobs(ctx, pool, ids); err != nil {
 				return AppErrMsg{Err: err}
 			}
 			return JobDeletedMsg{Desc: desc}
 		case EntityOrganisation:
-			if err := models.DeleteOrganisation(ctx, pool, id); err != nil {
+			if err := models.DeleteOrganisations(ctx, pool, ids); err != nil {
 				return AppErrMsg{Err: err}
 			}
 			return OrgDeletedMsg{Desc: desc}
@@ -651,6 +813,7 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case CandidateDeletedMsg:
 		m.statusMsg = fmt.Sprintf("Successfully deleted %s", msg.Desc)
 		m.isError = false
+		m.selectedProfileIDs = make(map[int]bool)
 		return m, tea.Batch(
 			fetchProfilesCmd(m.pool, m.searchQuery),
 			fetchSubmissionsCmd(m.pool, ""),
@@ -660,6 +823,7 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case ApplicationDeletedMsg:
 		m.statusMsg = fmt.Sprintf("Successfully deleted %s", msg.Desc)
 		m.isError = false
+		m.selectedSubmissionIDs = make(map[int]bool)
 		return m, tea.Batch(
 			fetchSubmissionsCmd(m.pool, ""),
 			m.kanbanModel.FetchApplicationsCmd(),
@@ -668,11 +832,13 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case JobDeletedMsg:
 		m.statusMsg = fmt.Sprintf("Successfully deleted %s", msg.Desc)
 		m.isError = false
+		m.selectedJobIDs = make(map[int]bool)
 		return m, fetchJobsCmd(m.pool)
 
 	case OrgDeletedMsg:
 		m.statusMsg = fmt.Sprintf("Successfully deleted %s", msg.Desc)
 		m.isError = false
+		m.selectedOrgIDs = make(map[int]bool)
 		return m, fetchOrgsCmd(m.pool)
 
 	case AppErrMsg:
@@ -686,7 +852,12 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			switch msg.String() {
 			case "y", "Y":
 				m.showDeleteConfirm = false
-				return m, deleteEntityCmd(m.pool, m.deleteTargetType, m.deleteTargetID, m.deleteTargetDesc)
+				ids := m.deleteTargetIDs
+				if len(ids) == 0 && m.deleteTargetID > 0 {
+					ids = []int{m.deleteTargetID}
+				}
+				m.clearCurrentTabSelection()
+				return m, deleteEntitiesCmd(m.pool, m.deleteTargetType, ids, m.deleteTargetDesc)
 			case "n", "N", "esc", "q":
 				m.showDeleteConfirm = false
 				m.statusMsg = "Deletion cancelled"
@@ -953,6 +1124,29 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 		case "enter", "d":
 			return m, m.openDetailModalCmd()
+
+		case " ":
+			if m.activeTab == TabApplications && m.appViewMode == AppViewKanban {
+				break
+			}
+			m.toggleCurrentRowSelection()
+			m.applySortingAndFilters()
+			cnt := m.selectedCount()
+			if cnt > 0 {
+				m.statusMsg = fmt.Sprintf("%d row(s) selected [press 'x' to delete, 'Esc' to clear]", cnt)
+			} else {
+				m.statusMsg = "Selection cleared"
+			}
+			return m, nil
+
+		case "esc":
+			if m.selectedCount() > 0 {
+				m.clearCurrentTabSelection()
+				m.applySortingAndFilters()
+				m.statusMsg = "Selection cleared"
+				return m, nil
+			}
+			return m, nil
 		}
 	}
 
@@ -988,11 +1182,32 @@ func (m AppModel) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m *AppModel) openDeleteConfirm() {
 	switch m.activeTab {
 	case TabProfiles:
-		idx := m.profilesTable.Cursor()
-		if idx >= 0 && idx < len(m.profiles) {
+		if len(m.selectedProfileIDs) > 0 {
+			var ids []int
+			var codes []string
+			list := m.filteredProfiles
+			if len(list) == 0 {
+				list = m.profiles
+			}
+			for _, p := range list {
+				if m.selectedProfileIDs[p.ID] {
+					ids = append(ids, p.ID)
+					codes = append(codes, p.CandidateCode)
+				}
+			}
 			m.deleteTargetType = EntityCandidate
-			m.deleteTargetID = m.profiles[idx].ID
-			m.deleteTargetDesc = fmt.Sprintf("Candidate '%s' (%s)", m.profiles[idx].Name, m.profiles[idx].CandidateCode)
+			m.deleteTargetIDs = ids
+			if len(codes) <= 3 {
+				m.deleteTargetDesc = fmt.Sprintf("%d Candidates (%s)", len(ids), strings.Join(codes, ", "))
+			} else {
+				m.deleteTargetDesc = fmt.Sprintf("%d Candidates (%s, +%d more)", len(ids), strings.Join(codes[:3], ", "), len(codes)-3)
+			}
+			m.showDeleteConfirm = true
+		} else if p := m.getSelectedProfile(); p != nil {
+			m.deleteTargetType = EntityCandidate
+			m.deleteTargetID = p.ID
+			m.deleteTargetIDs = []int{p.ID}
+			m.deleteTargetDesc = fmt.Sprintf("Candidate '%s' (%s)", p.Name, p.CandidateCode)
 			m.showDeleteConfirm = true
 		} else {
 			m.statusMsg = "No candidate selected to delete"
@@ -1004,6 +1219,7 @@ func (m *AppModel) openDeleteConfirm() {
 			if card != nil {
 				m.deleteTargetType = EntityApplication
 				m.deleteTargetID = card.ApplicationID
+				m.deleteTargetIDs = []int{card.ApplicationID}
 				m.deleteTargetDesc = fmt.Sprintf("Application of '%s' for job %s", card.CandidateName, card.JobCode)
 				m.showDeleteConfirm = true
 			} else {
@@ -1011,34 +1227,97 @@ func (m *AppModel) openDeleteConfirm() {
 				m.isError = true
 			}
 		} else {
-			idx := m.submissionsTable.Cursor()
-			if idx >= 0 && idx < len(m.submissions) {
-				m.deleteTargetType = EntityApplication
-				m.deleteTargetID = m.submissions[idx].ApplicationID
-				m.deleteTargetDesc = fmt.Sprintf("Application of '%s' for job %s", m.submissions[idx].CandidateName, m.submissions[idx].JobCode)
-				m.showDeleteConfirm = true
-			} else {
-				m.statusMsg = "No application selected to delete"
-				m.isError = true
+			if len(m.selectedSubmissionIDs) > 0 {
+				var ids []int
+				var descs []string
+				list := m.filteredSubmissions
+				if len(list) == 0 {
+					list = m.submissions
+				}
+				for _, s := range list {
+				if m.selectedSubmissionIDs[s.ApplicationID] {
+					ids = append(ids, s.ApplicationID)
+					descs = append(descs, fmt.Sprintf("%s->%s", s.CandidateCode, s.JobCode))
+				}
 			}
+			m.deleteTargetType = EntityApplication
+			m.deleteTargetIDs = ids
+			if len(descs) <= 3 {
+				m.deleteTargetDesc = fmt.Sprintf("%d Applications (%s)", len(ids), strings.Join(descs, ", "))
+			} else {
+				m.deleteTargetDesc = fmt.Sprintf("%d Applications (%s, +%d more)", len(ids), strings.Join(descs[:3], ", "), len(descs)-3)
+			}
+			m.showDeleteConfirm = true
+		} else if s := m.getSelectedSubmission(); s != nil {
+			m.deleteTargetType = EntityApplication
+			m.deleteTargetID = s.ApplicationID
+			m.deleteTargetIDs = []int{s.ApplicationID}
+			m.deleteTargetDesc = fmt.Sprintf("Application of '%s' for job %s", s.CandidateName, s.JobCode)
+			m.showDeleteConfirm = true
+		} else {
+			m.statusMsg = "No application selected to delete"
+			m.isError = true
 		}
+	}
 	case TabJobs:
-		idx := m.jobsTable.Cursor()
-		if idx >= 0 && idx < len(m.jobs) {
+		if len(m.selectedJobIDs) > 0 {
+			var ids []int
+			var codes []string
+			list := m.filteredJobs
+			if len(list) == 0 {
+				list = m.jobs
+			}
+			for _, j := range list {
+				if m.selectedJobIDs[j.ID] {
+					ids = append(ids, j.ID)
+					codes = append(codes, j.JobCode)
+				}
+			}
 			m.deleteTargetType = EntityJob
-			m.deleteTargetID = m.jobs[idx].ID
-			m.deleteTargetDesc = fmt.Sprintf("Job '%s' (%s)", m.jobs[idx].JobTitle, m.jobs[idx].JobCode)
+			m.deleteTargetIDs = ids
+			if len(codes) <= 3 {
+				m.deleteTargetDesc = fmt.Sprintf("%d Jobs (%s)", len(ids), strings.Join(codes, ", "))
+			} else {
+				m.deleteTargetDesc = fmt.Sprintf("%d Jobs (%s, +%d more)", len(ids), strings.Join(codes[:3], ", "), len(codes)-3)
+			}
+			m.showDeleteConfirm = true
+		} else if j := m.getSelectedJob(); j != nil {
+			m.deleteTargetType = EntityJob
+			m.deleteTargetID = j.ID
+			m.deleteTargetIDs = []int{j.ID}
+			m.deleteTargetDesc = fmt.Sprintf("Job '%s' (%s)", j.JobTitle, j.JobCode)
 			m.showDeleteConfirm = true
 		} else {
 			m.statusMsg = "No job selected to delete"
 			m.isError = true
 		}
 	case TabOrganisations:
-		idx := m.orgsTable.Cursor()
-		if idx >= 0 && idx < len(m.orgs) {
+		if len(m.selectedOrgIDs) > 0 {
+			var ids []int
+			var codes []string
+			list := m.filteredOrgs
+			if len(list) == 0 {
+				list = m.orgs
+			}
+			for _, o := range list {
+				if m.selectedOrgIDs[o.ID] {
+					ids = append(ids, o.ID)
+					codes = append(codes, o.OrgCode)
+				}
+			}
 			m.deleteTargetType = EntityOrganisation
-			m.deleteTargetID = m.orgs[idx].ID
-			m.deleteTargetDesc = fmt.Sprintf("Organisation '%s' (%s)", m.orgs[idx].OrgName, m.orgs[idx].OrgCode)
+			m.deleteTargetIDs = ids
+			if len(codes) <= 3 {
+				m.deleteTargetDesc = fmt.Sprintf("%d Organisations (%s)", len(ids), strings.Join(codes, ", "))
+			} else {
+				m.deleteTargetDesc = fmt.Sprintf("%d Organisations (%s, +%d more)", len(ids), strings.Join(codes[:3], ", "), len(codes)-3)
+			}
+			m.showDeleteConfirm = true
+		} else if o := m.getSelectedOrg(); o != nil {
+			m.deleteTargetType = EntityOrganisation
+			m.deleteTargetID = o.ID
+			m.deleteTargetIDs = []int{o.ID}
+			m.deleteTargetDesc = fmt.Sprintf("Organisation '%s' (%s)", o.OrgName, o.OrgCode)
 			m.showDeleteConfirm = true
 		} else {
 			m.statusMsg = "No organisation selected to delete"
@@ -1064,9 +1343,8 @@ func (m *AppModel) openAddForm() {
 func (m *AppModel) openEditForm() {
 	switch m.activeTab {
 	case TabProfiles:
-		idx := m.profilesTable.Cursor()
-		if idx >= 0 && idx < len(m.profiles) {
-			m.formModal = NewCandidateForm(&m.profiles[idx])
+		if p := m.getSelectedProfile(); p != nil {
+			m.formModal = NewCandidateForm(p)
 			m.showFormModal = true
 		}
 	case TabApplications:
@@ -1092,22 +1370,19 @@ func (m *AppModel) openEditForm() {
 				m.showFormModal = true
 			}
 		} else {
-			idx := m.submissionsTable.Cursor()
-			if idx >= 0 && idx < len(m.submissions) {
-				m.formModal = NewApplicationForm(&m.submissions[idx], m.submissions[idx].JobCode, m.submissions[idx].CandidateCode)
+			if s := m.getSelectedSubmission(); s != nil {
+				m.formModal = NewApplicationForm(s, s.JobCode, s.CandidateCode)
 				m.showFormModal = true
 			}
 		}
 	case TabJobs:
-		idx := m.jobsTable.Cursor()
-		if idx >= 0 && idx < len(m.jobs) {
-			m.formModal = NewJobForm(&m.jobs[idx])
+		if j := m.getSelectedJob(); j != nil {
+			m.formModal = NewJobForm(j)
 			m.showFormModal = true
 		}
 	case TabOrganisations:
-		idx := m.orgsTable.Cursor()
-		if idx >= 0 && idx < len(m.orgs) {
-			m.formModal = NewOrganisationForm(&m.orgs[idx])
+		if o := m.getSelectedOrg(); o != nil {
+			m.formModal = NewOrganisationForm(o)
 			m.showFormModal = true
 		}
 	}
@@ -1180,8 +1455,10 @@ func (m *AppModel) applySortingAndFilters() {
 		return less
 	})
 
+	m.filteredProfiles = filteredProfiles
 	visProfileCols := visibleColumns(allProfileColumns(), m.tabColOffsets[TabProfiles], availWidth)
 	var pRows []table.Row
+	hasSelectedProfiles := len(m.selectedProfileIDs) > 0
 	for _, p := range filteredProfiles {
 		rowMap := map[string]string{
 			"Candidate ID":              p.CandidateCode,
@@ -1193,8 +1470,15 @@ func (m *AppModel) applySortingAndFilters() {
 			"Date of Birth":             p.DOB,
 		}
 		var row table.Row
-		for _, col := range visProfileCols {
+		for colIdx, col := range visProfileCols {
 			val := rowMap[col.Title]
+			if colIdx == 0 {
+				if m.selectedProfileIDs[p.ID] {
+					val = "[✓] " + val
+				} else if hasSelectedProfiles {
+					val = "[ ] " + val
+				}
+			}
 			row = append(row, truncateString(val, col.Width))
 		}
 		pRows = append(pRows, row)
@@ -1245,8 +1529,10 @@ func (m *AppModel) applySortingAndFilters() {
 		return less
 	})
 
+	m.filteredSubmissions = filteredSubmissions
 	visSubCols := visibleColumns(allSubmissionColumns(), m.tabColOffsets[TabApplications], availWidth)
 	var sRows []table.Row
+	hasSelectedSubmissions := len(m.selectedSubmissionIDs) > 0
 	for _, s := range filteredSubmissions {
 		rowMap := map[string]string{
 			"Job ID":          s.JobCode,
@@ -1265,8 +1551,15 @@ func (m *AppModel) applySortingAndFilters() {
 			"Latest Comments": s.Comments,
 		}
 		var row table.Row
-		for _, col := range visSubCols {
+		for colIdx, col := range visSubCols {
 			val := rowMap[col.Title]
+			if colIdx == 0 {
+				if m.selectedSubmissionIDs[s.ApplicationID] {
+					val = "[✓] " + val
+				} else if hasSelectedSubmissions {
+					val = "[ ] " + val
+				}
+			}
 			row = append(row, truncateString(val, col.Width))
 		}
 		sRows = append(sRows, row)
@@ -1313,8 +1606,10 @@ func (m *AppModel) applySortingAndFilters() {
 		return less
 	})
 
+	m.filteredJobs = filteredJobs
 	visJobCols := visibleColumns(allJobColumns(), m.tabColOffsets[TabJobs], availWidth)
 	var jRows []table.Row
+	hasSelectedJobs := len(m.selectedJobIDs) > 0
 	for _, j := range filteredJobs {
 		rowMap := map[string]string{
 			"Job ID":          j.JobCode,
@@ -1329,8 +1624,15 @@ func (m *AppModel) applySortingAndFilters() {
 			"Profiles Shared": fmt.Sprintf("%d", j.NumShared),
 		}
 		var row table.Row
-		for _, col := range visJobCols {
+		for colIdx, col := range visJobCols {
 			val := rowMap[col.Title]
+			if colIdx == 0 {
+				if m.selectedJobIDs[j.ID] {
+					val = "[✓] " + val
+				} else if hasSelectedJobs {
+					val = "[ ] " + val
+				}
+			}
 			row = append(row, truncateString(val, col.Width))
 		}
 		jRows = append(jRows, row)
@@ -1367,8 +1669,10 @@ func (m *AppModel) applySortingAndFilters() {
 		return less
 	})
 
+	m.filteredOrgs = filteredOrgs
 	visOrgCols := visibleColumns(allOrgColumns(), m.tabColOffsets[TabOrganisations], availWidth)
 	var oRows []table.Row
+	hasSelectedOrgs := len(m.selectedOrgIDs) > 0
 	for _, o := range filteredOrgs {
 		rowMap := map[string]string{
 			"Organisation Name": o.OrgName,
@@ -1377,8 +1681,15 @@ func (m *AppModel) applySortingAndFilters() {
 			"Sub Category":      o.SubCategory,
 		}
 		var row table.Row
-		for _, col := range visOrgCols {
+		for colIdx, col := range visOrgCols {
 			val := rowMap[col.Title]
+			if colIdx == 0 {
+				if m.selectedOrgIDs[o.ID] {
+					val = "[✓] " + val
+				} else if hasSelectedOrgs {
+					val = "[ ] " + val
+				}
+			}
 			row = append(row, truncateString(val, col.Width))
 		}
 		oRows = append(oRows, row)
@@ -1598,9 +1909,7 @@ func (m *AppModel) openDetailModalCmd() tea.Cmd {
 
 	switch m.activeTab {
 	case TabProfiles:
-		idx := m.profilesTable.Cursor()
-		if idx >= 0 && idx < len(m.profiles) {
-			p := m.profiles[idx]
+		if p := m.getSelectedProfile(); p != nil {
 			m.modalTitle = fmt.Sprintf("Candidate: %s [%s]", p.Name, p.CandidateCode)
 			var sb strings.Builder
 			sb.WriteString(lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#7D56F4")).Render("CANDIDATE MASTER PROFILE\n"))
@@ -1629,9 +1938,7 @@ func (m *AppModel) openDetailModalCmd() tea.Cmd {
 				return fetchNotesCmd(m.pool, card.ApplicationID)
 			}
 		} else {
-			idx := m.submissionsTable.Cursor()
-			if idx >= 0 && idx < len(m.submissions) {
-				sub := m.submissions[idx]
+			if sub := m.getSelectedSubmission(); sub != nil {
 				m.modalTitle = fmt.Sprintf("Submission: %s -> %s", sub.CandidateName, sub.JobTitle)
 				m.rebuildModalContent()
 				return fetchNotesCmd(m.pool, sub.ApplicationID)
@@ -1639,9 +1946,7 @@ func (m *AppModel) openDetailModalCmd() tea.Cmd {
 		}
 
 	case TabJobs:
-		idx := m.jobsTable.Cursor()
-		if idx >= 0 && idx < len(m.jobs) {
-			j := m.jobs[idx]
+		if j := m.getSelectedJob(); j != nil {
 			m.modalTitle = fmt.Sprintf("Job Requisition: %s [%s]", j.JobTitle, j.JobCode)
 			var sb strings.Builder
 			sb.WriteString(lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#7D56F4")).Render("JOB REQUISITION DETAILS\n"))
@@ -1654,14 +1959,12 @@ func (m *AppModel) openDetailModalCmd() tea.Cmd {
 			sb.WriteString(fmt.Sprintf("• Location:        %s\n", j.Location))
 			sb.WriteString(fmt.Sprintf("• Requisition:     %s\n", j.RequisitionDate))
 			sb.WriteString(fmt.Sprintf("• Positions Open:  %d\n", j.NumPositions))
-			sb.WriteString(fmt.Sprintf("• Profiles Shared: %d\n", j.NumShared))
+			sb.WriteString(fmt.Sprintf("• Profiles Shared: %d\n\n", j.NumShared))
 			m.detailViewport.SetContent(sb.String())
 		}
 
 	case TabOrganisations:
-		idx := m.orgsTable.Cursor()
-		if idx >= 0 && idx < len(m.orgs) {
-			o := m.orgs[idx]
+		if o := m.getSelectedOrg(); o != nil {
 			m.modalTitle = fmt.Sprintf("Client: %s [%s]", o.OrgName, o.OrgCode)
 			var sb strings.Builder
 			sb.WriteString(lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#7D56F4")).Render("ORGANISATION PROFILE\n"))
@@ -1669,7 +1972,7 @@ func (m *AppModel) openDetailModalCmd() tea.Cmd {
 			sb.WriteString(fmt.Sprintf("• Organisation: %s\n", o.OrgName))
 			sb.WriteString(fmt.Sprintf("• Org Code:     %s\n", o.OrgCode))
 			sb.WriteString(fmt.Sprintf("• Industry:     %s\n", o.Industry))
-			sb.WriteString(fmt.Sprintf("• Sub Category: %s\n", o.SubCategory))
+			sb.WriteString(fmt.Sprintf("• Sub Category: %s\n\n", o.SubCategory))
 			m.detailViewport.SetContent(sb.String())
 		}
 	}
@@ -1706,11 +2009,10 @@ func (m *AppModel) rebuildModalContent() {
 		sb.WriteString(card.ResumeText + "\n\n")
 
 	} else {
-		idx := m.submissionsTable.Cursor()
-		if idx < 0 || idx >= len(m.submissions) {
+		sub := m.getSelectedSubmission()
+		if sub == nil {
 			return
 		}
-		sub := m.submissions[idx]
 		sb.WriteString(lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#7D56F4")).Render("APPLICATION & SUBMISSION PROFILE\n"))
 		sb.WriteString(strings.Repeat("─", 70) + "\n")
 		sb.WriteString(fmt.Sprintf("• Candidate:       %s [%s]\n", sub.CandidateName, sub.CandidateCode))
@@ -1767,9 +2069,7 @@ func (m AppModel) renderSplitPane() string {
 
 	switch m.activeTab {
 	case TabProfiles:
-		idx := m.profilesTable.Cursor()
-		if idx >= 0 && idx < len(m.profiles) {
-			p := m.profiles[idx]
+		if p := m.getSelectedProfile(); p != nil {
 			body = fmt.Sprintf(
 				"%s (%s) • %s • %s\nEducation: %s • DOB: %s\nResume Preview: %s",
 				lipgloss.NewStyle().Bold(true).Render(p.Name),
@@ -1810,9 +2110,7 @@ func (m AppModel) renderSplitPane() string {
 				body = "No application card selected."
 			}
 		} else {
-			idx := m.submissionsTable.Cursor()
-			if idx >= 0 && idx < len(m.submissions) {
-				s := m.submissions[idx]
+			if s := m.getSelectedSubmission(); s != nil {
 				body = fmt.Sprintf(
 					"%s [%s] -> %s (%s) • Status: %s\nRole: %s @ %s • Comp: Current $%dk / Exp $%dk\nProducts: %s\nLatest Note: %s",
 					lipgloss.NewStyle().Bold(true).Render(s.CandidateName),
@@ -1833,9 +2131,7 @@ func (m AppModel) renderSplitPane() string {
 		}
 
 	case TabJobs:
-		idx := m.jobsTable.Cursor()
-		if idx >= 0 && idx < len(m.jobs) {
-			j := m.jobs[idx]
+		if j := m.getSelectedJob(); j != nil {
 			body = fmt.Sprintf(
 				"%s (%s) for %s\nDepartment: %s / %s • Location: %s • Requisition Date: %s\nOpen Positions: %d • Profiles Shared: %d",
 				lipgloss.NewStyle().Bold(true).Render(j.JobTitle),
@@ -1853,9 +2149,7 @@ func (m AppModel) renderSplitPane() string {
 		}
 
 	case TabOrganisations:
-		idx := m.orgsTable.Cursor()
-		if idx >= 0 && idx < len(m.orgs) {
-			o := m.orgs[idx]
+		if o := m.getSelectedOrg(); o != nil {
 			body = fmt.Sprintf(
 				"Organisation: %s [Code: %s]\nIndustry: %s\nSub Category: %s",
 				lipgloss.NewStyle().Bold(true).Render(o.OrgName),
@@ -2036,9 +2330,14 @@ func (m AppModel) renderDeleteConfirmModal() string {
 		Foreground(lipgloss.Color("#FDA4AF")).
 		Render(m.deleteTargetDesc)
 
+	warningText := "Are you sure you want to permanently delete this record?\nThis action cannot be undone."
+	if len(m.deleteTargetIDs) > 1 {
+		warningText = fmt.Sprintf("Are you sure you want to permanently delete these %d records?\nThis action cannot be undone.", len(m.deleteTargetIDs))
+	}
+
 	warningMsg := lipgloss.NewStyle().
 		Foreground(lipgloss.Color("#E2E8F0")).
-		Render("Are you sure you want to permanently delete this record?\nThis action cannot be undone.")
+		Render(warningText)
 
 	prompt := lipgloss.NewStyle().
 		Bold(true).
@@ -2222,6 +2521,25 @@ func (m AppModel) View() string {
 		subHeaderParts = append(subHeaderParts, searchPill)
 	}
 
+	// Multi-Selection Indicator
+	selCount := m.selectedCount()
+	if selCount > 0 {
+		entityName := "items"
+		switch m.activeTab {
+		case TabProfiles:
+			entityName = "candidates"
+		case TabApplications:
+			entityName = "applications"
+		case TabJobs:
+			entityName = "jobs"
+		case TabOrganisations:
+			entityName = "organisations"
+		}
+		selPill := lipgloss.NewStyle().Bold(true).Foreground(lipgloss.Color("#00FFA3")).
+			Render(fmt.Sprintf("Selected: %d %s [Space toggle • Esc clear • x delete]", selCount, entityName))
+		subHeaderParts = append(subHeaderParts, selPill)
+	}
+
 	subHeader := strings.Join(subHeaderParts, "  •  ")
 
 	// 5. Global Search Bar Overlay if active
@@ -2308,10 +2626,13 @@ func (m AppModel) getHelpParts() []string {
 		"[p] Preview",
 		"[[/]] Cols",
 	}
-	if m.activeTab == TabApplications {
+	if m.activeTab == TabApplications && m.appViewMode == AppViewKanban {
 		helpParts = append(helpParts, "[v/t] Kanban/Table", "[m/b] Stage")
 	} else {
-		helpParts = append(helpParts, "[↑/↓] Select")
+		helpParts = append(helpParts, "[Space] Select", "[↑/↓] Select")
+		if m.activeTab == TabApplications {
+			helpParts = append(helpParts, "[v/t] Kanban/Table")
+		}
 	}
 	helpParts = append(helpParts, "[R] Reload DB", "[q] Quit")
 	return helpParts

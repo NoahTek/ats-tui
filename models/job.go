@@ -164,3 +164,25 @@ func DeleteJob(ctx context.Context, pool *pgxpool.Pool, id int) error {
 	}
 	return nil
 }
+
+// DeleteJobs removes multiple job requisitions by their IDs.
+func DeleteJobs(ctx context.Context, pool *pgxpool.Pool, ids []int) error {
+	if len(ids) == 0 {
+		return nil
+	}
+	var count int
+	err := pool.QueryRow(ctx, `SELECT COUNT(*) FROM applications WHERE job_id = ANY($1);`, ids).Scan(&count)
+	if err == nil && count > 0 {
+		return fmt.Errorf("cannot delete jobs: %d application(s) are linked to them. Please delete or reassign them first", count)
+	}
+
+	query := `DELETE FROM jobs WHERE id = ANY($1);`
+	tag, err := pool.Exec(ctx, query, ids)
+	if err != nil {
+		return fmt.Errorf("failed to delete job postings: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("no job postings found to delete")
+	}
+	return nil
+}
