@@ -4,6 +4,7 @@ import (
 	"testing"
 
 	"ats-tui/models"
+	"strings"
 )
 
 func TestStageTransitions(t *testing.T) {
@@ -70,5 +71,31 @@ func TestColumnCursorNavigation(t *testing.T) {
 	col.MoveCursor(-5)
 	if col.Cursor != 0 {
 		t.Fatalf("expected cursor to clamp at 0, got %d", col.Cursor)
+	}
+}
+
+func TestCardRenderingAndSelectionHighlight(t *testing.T) {
+	m := NewModel(nil)
+	m.SetSize(120, 30)
+
+	m.columns[0].Cards = []models.ApplicationCard{
+		{ApplicationID: 1, CandidateName: "Alex Rivera", CandidateCode: "CAN-001", Designation: "Engineer", Skill: "Go", ExpectedCTC: 150000, JobCode: "JOB1"},
+		{ApplicationID: 2, CandidateName: "Marcus Vance", CandidateCode: "CAN-003", Designation: "CLI Dev", Skill: "Go", ExpectedCTC: 160000, JobCode: "JOB1"},
+	}
+	m.columns[1].Cards = []models.ApplicationCard{
+		{ApplicationID: 3, CandidateName: "Priya Sharma", CandidateCode: "CAN-002", Designation: "Backend", Skill: "PostgreSQL", ExpectedCTC: 175000, JobCode: "JOB2"},
+	}
+	m.activeCol = 0
+	m.columns[0].Cursor = 0
+	m.columns[1].Cursor = 0
+
+	view := m.View()
+	if !strings.Contains(view, "Alex Rivera") || !strings.Contains(view, "Priya Sharma") {
+		t.Fatalf("expected view to contain candidate names")
+	}
+
+	// Verify rounded border characters are present for full card borders
+	if !strings.Contains(view, "╭") || !strings.Contains(view, "╰") {
+		t.Fatalf("expected view to contain rounded border characters")
 	}
 }

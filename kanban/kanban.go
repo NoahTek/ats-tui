@@ -310,23 +310,20 @@ var (
 				Padding(0, 1)
 
 	cardSelectedActive = lipgloss.NewStyle().
-				Border(lipgloss.NormalBorder(), false, false, false, true).
+				Border(lipgloss.RoundedBorder()).
 				BorderForeground(lipgloss.Color("#00D7D7")).
-				Background(lipgloss.Color("#2D1B69")).
 				Padding(0, 1).
 				MarginBottom(1)
 
 	cardSelectedInactive = lipgloss.NewStyle().
-				Border(lipgloss.NormalBorder(), false, false, false, true).
-				BorderForeground(lipgloss.Color("#555555")).
-				Background(lipgloss.Color("#1E1E1E")).
+				Border(lipgloss.RoundedBorder()).
+				BorderForeground(lipgloss.Color("#383838")).
 				Padding(0, 1).
 				MarginBottom(1)
 
 	cardNormal = lipgloss.NewStyle().
-			Border(lipgloss.NormalBorder(), false, false, false, true).
-			BorderForeground(lipgloss.Color("#2A2A2A")).
-			Background(lipgloss.Color("#161616")).
+			Border(lipgloss.RoundedBorder()).
+			BorderForeground(lipgloss.Color("#383838")).
 			Padding(0, 1).
 			MarginBottom(1)
 
@@ -393,8 +390,6 @@ func (m Model) View() string {
 				var cardStyle lipgloss.Style
 				if isSelectedCard && isActiveCol {
 					cardStyle = cardSelectedActive.Width(colWidth - 4)
-				} else if isSelectedCard && !isActiveCol {
-					cardStyle = cardSelectedInactive.Width(colWidth - 4)
 				} else {
 					cardStyle = cardNormal.Width(colWidth - 4)
 				}
